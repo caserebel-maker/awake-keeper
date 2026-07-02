@@ -1,0 +1,11 @@
+{
+  "name": "awake-keeper",
+  "version": "1.0.0",
+  "description": "Keep Antigravity and Codex active to reset limit countdowns early",
+  "main": "awake_keeper.py",
+  "scripts": {
+    "start": "python3 awake_keeper.py"
+  },
+  "author": "caserebel-maker",
+  "license": "MIT"
+}
