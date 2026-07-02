@@ -1059,6 +1059,8 @@ INDEX_HTML = """
     </section>
 
     <script>
+        let initialLoadDone = false;
+
         function formatTime(seconds) {
             const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
             const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
@@ -1095,15 +1097,13 @@ INDEX_HTML = """
                     document.getElementById('ag-target-time').innerText = data.antigravity.next_trigger || 'None';
                 }
                 
-                // Bind Antigravity slots
-                if (data.antigravity.slots) {
+                // Bind Antigravity slots (only on initial load)
+                if (!initialLoadDone && data.antigravity.slots) {
                     data.antigravity.slots.forEach((slot, i) => {
                         const tInput = document.getElementById(`ag-slot-${i}-time`);
                         const eCheckbox = document.getElementById(`ag-slot-${i}-enabled`);
                         if (tInput && eCheckbox) {
-                            if (document.activeElement !== tInput) {
-                                tInput.value = slot.time;
-                            }
+                            tInput.value = slot.time;
                             eCheckbox.checked = slot.enabled;
                         }
                     });
@@ -1133,26 +1133,24 @@ INDEX_HTML = """
                     document.getElementById('cx-target-time').innerText = data.codex.next_trigger || 'None';
                 }
 
-                // Bind Codex slots
-                if (data.codex.slots) {
+                // Bind Codex slots (only on initial load)
+                if (!initialLoadDone && data.codex.slots) {
                     data.codex.slots.forEach((slot, i) => {
                         const tInput = document.getElementById(`cx-slot-${i}-time`);
                         const eCheckbox = document.getElementById(`cx-slot-${i}-enabled`);
                         if (tInput && eCheckbox) {
-                            if (document.activeElement !== tInput) {
-                                tInput.value = slot.time;
-                            }
+                            tInput.value = slot.time;
                             eCheckbox.checked = slot.enabled;
                         }
                     });
                 }
 
-
-
-                // Update prompt template input if focused is not active
-                if (document.activeElement !== document.getElementById('prompt-template-input')) {
+                // Update prompt template input (only on initial load)
+                if (!initialLoadDone) {
                     document.getElementById('prompt-template-input').value = data.prompt_template;
                 }
+
+                initialLoadDone = true;
 
                 // Update logs
                 const logsList = document.getElementById('logs-list');
@@ -1280,9 +1278,10 @@ INDEX_HTML = """
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(payload)
                 });
+                alert(`${target === 'antigravity' ? 'Antigravity' : 'Codex'} slots saved successfully!`);
                 fetchStatus();
             } catch (err) {
-                console.error("Failed to save slots:", err);
+                alert("Failed to save slots: " + err);
             }
         }
 
