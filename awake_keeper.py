@@ -20,17 +20,25 @@ DEFAULT_STATE = {
         "trigger": "gui",
         "enabled": True,
         "mode": "duration",         # "duration" or "specific"
-        "specific_time": "03:00",   # "HH:MM"
+        "slots": [
+            {"time": "03:00", "enabled": True},
+            {"time": "08:00", "enabled": False},
+            {"time": "13:00", "enabled": False}
+        ],
         "last_trigger": None,
         "last_status": "Idle"
     },
     "codex": {
         "timer": 18000,
         "duration": 18000,
-        "trigger": "cli",
+        "trigger": "gui",
         "enabled": True,
         "mode": "duration",         # "duration" or "specific"
-        "specific_time": "03:00",   # "HH:MM"
+        "slots": [
+            {"time": "03:00", "enabled": True},
+            {"time": "08:00", "enabled": False},
+            {"time": "13:00", "enabled": False}
+        ],
         "last_trigger": None,
         "last_status": "Idle"
     },
@@ -38,7 +46,7 @@ DEFAULT_STATE = {
     "logs": []
 }
 
-STATE = DEFAULT_STATE.copy()
+STATE = json.loads(json.dumps(DEFAULT_STATE))
 
 def load_state():
     global STATE
@@ -46,13 +54,17 @@ def load_state():
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, "r") as f:
                 saved = json.load(f)
-                # Merge saved state into default state to maintain schema
-                for key in DEFAULT_STATE:
-                    if key in saved:
-                        if isinstance(DEFAULT_STATE[key], dict):
+                STATE = json.loads(json.dumps(DEFAULT_STATE))
+                for key in saved:
+                    if key in STATE:
+                        if isinstance(STATE[key], dict):
                             STATE[key].update(saved[key])
                         else:
                             STATE[key] = saved[key]
+                # Ensure slots is in both configurations
+                for target in ["antigravity", "codex"]:
+                    if "slots" not in STATE[target]:
+                        STATE[target]["slots"] = json.loads(json.dumps(DEFAULT_STATE[target]["slots"]))
     except Exception as e:
         print(f"Error loading state: {e}")
 
@@ -246,19 +258,23 @@ def scheduler_loop():
         with LOCK:
             now_time = time.strftime("%H:%M:%S")
             
-            # Handle Antigravity countdown/specific time
+            # Handle Antigravity slots / countdown
             if STATE["antigravity"]["enabled"]:
                 if STATE["antigravity"].get("mode", "duration") == "specific":
-                    # Update timer dynamically for UI countdown
-                    spec_t = STATE["antigravity"].get("specific_time", "03:00")
-                    STATE["antigravity"]["timer"] = get_seconds_until_time(spec_t)
-                    # Trigger exactly at the target HH:MM:00
-                    if now_time == spec_t + ":00":
-                        threading.Thread(target=perform_trigger, args=("antigravity",)).start()
-                        # Auto-shift to next 5h cycle
-                        next_t = add_hours_to_time_str(spec_t, 5)
-                        STATE["antigravity"]["specific_time"] = next_t
-                        add_log(f"Antigravity triggered. Next target auto-scheduled for {next_t}", True, "INFO")
+                    # Get all enabled slots
+                    enabled_slots = [s for s in STATE["antigravity"].get("slots", []) if s.get("enabled", False)]
+                    if enabled_slots:
+                        # Find nearest countdown timer
+                        times = [get_seconds_until_time(s["time"]) for s in enabled_slots]
+                        STATE["antigravity"]["timer"] = min(times)
+                        
+                        # Trigger if current time matches any slot
+                        for slot in enabled_slots:
+                            if now_time == slot["time"] + ":00":
+                                threading.Thread(target=perform_trigger, args=("antigravity",)).start()
+                                add_log(f"Antigravity triggered at scheduled time {slot['time']}", True, "INFO")
+                    else:
+                        STATE["antigravity"]["timer"] = 0
                 else:
                     # Duration mode (standard countdown)
                     if STATE["antigravity"]["timer"] > 0:
@@ -267,19 +283,23 @@ def scheduler_loop():
                         threading.Thread(target=perform_trigger, args=("antigravity",)).start()
                         STATE["antigravity"]["timer"] = STATE["antigravity"]["duration"]
             
-            # Handle Codex countdown/specific time
+            # Handle Codex slots / countdown
             if STATE["codex"]["enabled"]:
                 if STATE["codex"].get("mode", "duration") == "specific":
-                    # Update timer dynamically for UI countdown
-                    spec_t = STATE["codex"].get("specific_time", "03:00")
-                    STATE["codex"]["timer"] = get_seconds_until_time(spec_t)
-                    # Trigger exactly at the target HH:MM:00
-                    if now_time == spec_t + ":00":
-                        threading.Thread(target=perform_trigger, args=("codex",)).start()
-                        # Auto-shift to next 5h cycle
-                        next_t = add_hours_to_time_str(spec_t, 5)
-                        STATE["codex"]["specific_time"] = next_t
-                        add_log(f"Codex triggered. Next target auto-scheduled for {next_t}", True, "INFO")
+                    # Get all enabled slots
+                    enabled_slots = [s for s in STATE["codex"].get("slots", []) if s.get("enabled", False)]
+                    if enabled_slots:
+                        # Find nearest countdown timer
+                        times = [get_seconds_until_time(s["time"]) for s in enabled_slots]
+                        STATE["codex"]["timer"] = min(times)
+                        
+                        # Trigger if current time matches any slot
+                        for slot in enabled_slots:
+                            if now_time == slot["time"] + ":00":
+                                threading.Thread(target=perform_trigger, args=("codex",)).start()
+                                add_log(f"Codex triggered at scheduled time {slot['time']}", True, "INFO")
+                    else:
+                        STATE["codex"]["timer"] = 0
                 else:
                     # Duration mode (standard countdown)
                     if STATE["codex"]["timer"] > 0:
@@ -879,12 +899,40 @@ INDEX_HTML = """
                 </div>
 
                 <div id="ag-specific-section" style="display: none;">
-                    <label class="control-label">Specific Clock Time</label>
-                    <div class="input-row">
-                        <input type="time" class="text-input" id="ag-set-specific" value="03:00">
-                        <button class="btn-set" onclick="add5Hours('antigravity')" style="background: rgba(255, 255, 255, 0.05); margin-right: 0.5rem;">+5h</button>
-                        <button class="btn-set" onclick="saveSpecificTime('antigravity')">Save</button>
+                    <label class="control-label" style="margin-bottom: 0.5rem;">Specific Times (Up to 3 slots)</label>
+                    <div style="display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 0.8rem;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04);">
+                            <span style="font-size: 0.85rem; color: var(--text-secondary);">Slot 1</span>
+                            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                <input type="time" class="text-input" id="ag-slot-0-time" style="width: auto; padding: 0.2rem 0.4rem; height: 30px; font-size: 0.9rem;" value="03:00">
+                                <label class="switch" style="width: 40px; height: 20px;">
+                                    <input type="checkbox" id="ag-slot-0-enabled" onchange="saveSlots('antigravity')">
+                                    <span class="slider" style="border-radius: 20px;"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04);">
+                            <span style="font-size: 0.85rem; color: var(--text-secondary);">Slot 2</span>
+                            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                <input type="time" class="text-input" id="ag-slot-1-time" style="width: auto; padding: 0.2rem 0.4rem; height: 30px; font-size: 0.9rem;" value="08:00">
+                                <label class="switch" style="width: 40px; height: 20px;">
+                                    <input type="checkbox" id="ag-slot-1-enabled" onchange="saveSlots('antigravity')">
+                                    <span class="slider" style="border-radius: 20px;"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04);">
+                            <span style="font-size: 0.85rem; color: var(--text-secondary);">Slot 3</span>
+                            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                <input type="time" class="text-input" id="ag-slot-2-time" style="width: auto; padding: 0.2rem 0.4rem; height: 30px; font-size: 0.9rem;" value="13:00">
+                                <label class="switch" style="width: 40px; height: 20px;">
+                                    <input type="checkbox" id="ag-slot-2-enabled" onchange="saveSlots('antigravity')">
+                                    <span class="slider" style="border-radius: 20px;"></span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
+                    <button class="btn-set" onclick="saveSlots('antigravity')" style="width: 100%; height: 36px; padding: 0;">Save Slots</button>
                 </div>
             </div>
 
@@ -945,12 +993,40 @@ INDEX_HTML = """
                 </div>
 
                 <div id="cx-specific-section" style="display: none;">
-                    <label class="control-label">Specific Clock Time</label>
-                    <div class="input-row">
-                        <input type="time" class="text-input" id="cx-set-specific" value="03:00">
-                        <button class="btn-set" onclick="add5Hours('codex')" style="background: rgba(255, 255, 255, 0.05); margin-right: 0.5rem;">+5h</button>
-                        <button class="btn-set" onclick="saveSpecificTime('codex')">Save</button>
+                    <label class="control-label" style="margin-bottom: 0.5rem;">Specific Times (Up to 3 slots)</label>
+                    <div style="display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 0.8rem;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04);">
+                            <span style="font-size: 0.85rem; color: var(--text-secondary);">Slot 1</span>
+                            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                <input type="time" class="text-input" id="cx-slot-0-time" style="width: auto; padding: 0.2rem 0.4rem; height: 30px; font-size: 0.9rem;" value="03:00">
+                                <label class="switch" style="width: 40px; height: 20px;">
+                                    <input type="checkbox" id="cx-slot-0-enabled" onchange="saveSlots('codex')">
+                                    <span class="slider" style="border-radius: 20px;"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04);">
+                            <span style="font-size: 0.85rem; color: var(--text-secondary);">Slot 2</span>
+                            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                <input type="time" class="text-input" id="cx-slot-1-time" style="width: auto; padding: 0.2rem 0.4rem; height: 30px; font-size: 0.9rem;" value="08:00">
+                                <label class="switch" style="width: 40px; height: 20px;">
+                                    <input type="checkbox" id="cx-slot-1-enabled" onchange="saveSlots('codex')">
+                                    <span class="slider" style="border-radius: 20px;"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04);">
+                            <span style="font-size: 0.85rem; color: var(--text-secondary);">Slot 3</span>
+                            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                <input type="time" class="text-input" id="cx-slot-2-time" style="width: auto; padding: 0.2rem 0.4rem; height: 30px; font-size: 0.9rem;" value="13:00">
+                                <label class="switch" style="width: 40px; height: 20px;">
+                                    <input type="checkbox" id="cx-slot-2-enabled" onchange="saveSlots('codex')">
+                                    <span class="slider" style="border-radius: 20px;"></span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
+                    <button class="btn-set" onclick="saveSlots('codex')" style="width: 100%; height: 36px; padding: 0;">Save Slots</button>
                 </div>
             </div>
 
@@ -1016,10 +1092,21 @@ INDEX_HTML = """
                     document.getElementById('ag-duration-section').style.display = 'none';
                     document.getElementById('ag-specific-section').style.display = 'block';
                     document.getElementById('ag-target-time-label').style.display = 'block';
-                    document.getElementById('ag-target-time').innerText = data.antigravity.specific_time || '03:00';
+                    document.getElementById('ag-target-time').innerText = data.antigravity.next_trigger || 'None';
                 }
-                if (document.activeElement !== document.getElementById('ag-set-specific')) {
-                    document.getElementById('ag-set-specific').value = data.antigravity.specific_time || '03:00';
+                
+                // Bind Antigravity slots
+                if (data.antigravity.slots) {
+                    data.antigravity.slots.forEach((slot, i) => {
+                        const tInput = document.getElementById(`ag-slot-${i}-time`);
+                        const eCheckbox = document.getElementById(`ag-slot-${i}-enabled`);
+                        if (tInput && eCheckbox) {
+                            if (document.activeElement !== tInput) {
+                                tInput.value = slot.time;
+                            }
+                            eCheckbox.checked = slot.enabled;
+                        }
+                    });
                 }
 
                 // Update Codex
@@ -1043,10 +1130,21 @@ INDEX_HTML = """
                     document.getElementById('cx-duration-section').style.display = 'none';
                     document.getElementById('cx-specific-section').style.display = 'block';
                     document.getElementById('cx-target-time-label').style.display = 'block';
-                    document.getElementById('cx-target-time').innerText = data.codex.specific_time || '03:00';
+                    document.getElementById('cx-target-time').innerText = data.codex.next_trigger || 'None';
                 }
-                if (document.activeElement !== document.getElementById('cx-set-specific')) {
-                    document.getElementById('cx-set-specific').value = data.codex.specific_time || '03:00';
+
+                // Bind Codex slots
+                if (data.codex.slots) {
+                    data.codex.slots.forEach((slot, i) => {
+                        const tInput = document.getElementById(`cx-slot-${i}-time`);
+                        const eCheckbox = document.getElementById(`cx-slot-${i}-enabled`);
+                        if (tInput && eCheckbox) {
+                            if (document.activeElement !== tInput) {
+                                tInput.value = slot.time;
+                            }
+                            eCheckbox.checked = slot.enabled;
+                        }
+                    });
                 }
 
 
@@ -1164,36 +1262,18 @@ INDEX_HTML = """
             }
         }
 
-        async function saveSpecificTime(target) {
-            const val = document.getElementById(`${target === 'antigravity' ? 'ag' : 'cx'}-set-specific`).value;
-            const payload = {};
-            payload[target] = { specific_time: val };
-            try {
-                await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-                fetchStatus();
-                alert("Specific time saved!");
-            } catch (err) {
-                alert("Failed to save specific time: " + err);
+        async function saveSlots(target) {
+            const prefix = target === 'antigravity' ? 'ag' : 'cx';
+            const slots = [];
+            for (let i = 0; i < 3; i++) {
+                const time = document.getElementById(`${prefix}-slot-${i}-time`).value;
+                const enabled = document.getElementById(`${prefix}-slot-${i}-enabled`).checked;
+                slots.push({time, enabled});
             }
-        }
-
-        async function add5Hours(target) {
-            const input = document.getElementById(`${target === 'antigravity' ? 'ag' : 'cx'}-set-specific`);
-            const val = input.value;
-            if (!val) return;
-            const parts = val.split(":");
-            let h = parseInt(parts[0]);
-            let m = parseInt(parts[1]);
-            h = (h + 5) % 24;
-            const newVal = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-            input.value = newVal;
             
             const payload = {};
-            payload[target] = { specific_time: newVal };
+            payload[target] = { slots: slots };
+            
             try {
                 await fetch('/api/settings', {
                     method: 'POST',
@@ -1202,7 +1282,7 @@ INDEX_HTML = """
                 });
                 fetchStatus();
             } catch (err) {
-                console.error("Failed to add 5 hours:", err);
+                console.error("Failed to save slots:", err);
             }
         }
 
@@ -1229,8 +1309,16 @@ class KeepAwakeHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             with LOCK:
-                response_data = STATE.copy()
+                response_data = json.loads(json.dumps(STATE))
                 response_data["latest_commit"] = get_latest_commit_message()
+                for target in ["antigravity", "codex"]:
+                    enabled_slots = [s for s in response_data[target].get("slots", []) if s.get("enabled", False)]
+                    if enabled_slots:
+                        slot_times = [(s["time"], get_seconds_until_time(s["time"])) for s in enabled_slots]
+                        nearest_slot = min(slot_times, key=lambda x: x[1])
+                        response_data[target]["next_trigger"] = nearest_slot[0]
+                    else:
+                        response_data[target]["next_trigger"] = "None (No slots active)"
             self.wfile.write(json.dumps(response_data).encode('utf-8'))
         else:
             self.send_response(404)
