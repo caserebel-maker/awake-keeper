@@ -206,17 +206,20 @@ def perform_trigger(target):
         if target in ["codex", "both"]:
             if STATE["codex"]["enabled"]:
                 STATE["codex"]["last_status"] = "Triggering..."
-                success, output = trigger_codex_gui(prompt)
-                
-                # If GUI fails, fall back to Silent CLI (works even on lock screen)
-                if not success:
-                    add_log(f"Codex GUI trigger failed: {output}. Falling back to Silent CLI...", True, "INFO")
+                method = STATE["codex"].get("trigger", "cli")
+                if method == "cli":
                     success, output = trigger_codex_cli(prompt)
+                else:
+                    success, output = trigger_codex_gui(prompt)
+                    # If GUI fails, fall back to Silent CLI (works even on lock screen)
+                    if not success:
+                        add_log(f"Codex GUI trigger failed: {output}. Falling back to Silent CLI...", True, "INFO")
+                        success, output = trigger_codex_cli(prompt)
                 
                 STATE["codex"]["last_trigger"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 if success:
                     STATE["codex"]["last_status"] = "Success"
-                    add_log(f"Codex triggered successfully using commit prompt: '{commit_msg}'", True, "SUCCESS")
+                    add_log(f"Codex triggered successfully ({method.upper()}) using commit prompt: '{commit_msg}'", True, "SUCCESS")
                 else:
                     STATE["codex"]["last_status"] = f"Failed: {output}"
                     add_log(f"Failed to trigger Codex: {output}", False, "ERROR")
@@ -979,7 +982,8 @@ INDEX_HTML = """
             <div class="controls-group">
                 <label class="control-label">Trigger Method</label>
                 <div class="method-selector">
-                    <button class="method-btn active" id="cx-method-gui">AppleScript GUI</button>
+                    <button class="method-btn" id="cx-method-cli" onclick="toggleCodexMethod('cli')">Silent CLI</button>
+                    <button class="method-btn" id="cx-method-gui" onclick="toggleCodexMethod('gui')">AppleScript GUI</button>
                 </div>
 
                 <label class="control-label">Timer Mode</label>
@@ -1071,6 +1075,7 @@ INDEX_HTML = """
 
     <script>
         let initialLoadDone = false;
+        let cxMethod = 'cli';
 
         function formatTime(seconds) {
             const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -1126,6 +1131,16 @@ INDEX_HTML = """
                 document.getElementById('cx-enabled').checked = data.codex.enabled;
                 const cxPercent = (data.codex.timer / data.codex.duration) * 100;
                 document.getElementById('cx-progress').style.width = `${100 - cxPercent}%`;
+
+                // Set active class on Codex trigger method
+                cxMethod = data.codex.trigger || 'cli';
+                if (cxMethod === 'cli') {
+                    document.getElementById('cx-method-cli').classList.add('active');
+                    document.getElementById('cx-method-gui').classList.remove('active');
+                } else {
+                    document.getElementById('cx-method-gui').classList.add('active');
+                    document.getElementById('cx-method-cli').classList.remove('active');
+                }
 
                 // Update Codex Mode UI
                 const cxModeState = data.codex.mode || 'duration';
@@ -1217,6 +1232,11 @@ INDEX_HTML = """
             }
         }
 
+        async function toggleCodexMethod(method) {
+            cxMethod = method;
+            updateSettings('codex');
+        }
+
         async function updateSettings(target) {
             const payload = {};
             if (target === 'antigravity') {
@@ -1225,7 +1245,8 @@ INDEX_HTML = """
                 };
             } else if (target === 'codex') {
                 payload.codex = {
-                    enabled: document.getElementById('cx-enabled').checked
+                    enabled: document.getElementById('cx-enabled').checked,
+                    trigger: cxMethod
                 };
             }
 
