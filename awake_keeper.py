@@ -104,6 +104,12 @@ def get_latest_commit_message():
 
 def run_applescript(script_content):
     try:
+        # Wake display first to prevent AppleEvent timeout (-1712) when display is asleep
+        subprocess.run(["caffeinate", "-u", "-t", "5"], capture_output=True)
+    except Exception:
+        pass
+        
+    try:
         res = subprocess.run(
             ["osascript", "-e", script_content],
             capture_output=True,
@@ -201,6 +207,11 @@ def perform_trigger(target):
             if STATE["codex"]["enabled"]:
                 STATE["codex"]["last_status"] = "Triggering..."
                 success, output = trigger_codex_gui(prompt)
+                
+                # If GUI fails, fall back to Silent CLI (works even on lock screen)
+                if not success:
+                    add_log(f"Codex GUI trigger failed: {output}. Falling back to Silent CLI...", True, "INFO")
+                    success, output = trigger_codex_cli(prompt)
                 
                 STATE["codex"]["last_trigger"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 if success:
